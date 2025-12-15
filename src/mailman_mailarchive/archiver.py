@@ -24,32 +24,29 @@
 # Author: Henrik Levkowetz <henrik@merlot.tools.ietf.org>
 
 
-"""Mailman 3 IArchiver for IETF Mailarchive."""
+"""Mailman 3 IArchiver for IETF Mail Archive."""
 
 import logging
-
-from base64 import urlsafe_b64encode, b64encode
+import traceback
+from base64 import b64encode, urlsafe_b64encode
 from email.utils import make_msgid
 from hashlib import sha1
 from io import StringIO
+from os.path import join as pathjoin
+from urllib.parse import urljoin
+
 from mailman.config import config
 from mailman.config.config import external_configuration
 from mailman.core.switchboard import Switchboard
-from mailman.interfaces.archiver import IArchiver, ArchivePolicy
-from mailman.utilities.string import expand
-from os.path import join as pathjoin
+from mailman.interfaces.archiver import IArchiver
 from public import public
 from requests import post
-from subprocess import run
-from tempfile import NamedTemporaryFile
-from urllib.parse import urljoin
+from requests.exceptions import RequestException
 from zope.interface import implementer
-
 
 log = logging.getLogger('mailman.archiver')
 
-# from mailman-hyperkitty
-# #### this doesn't work! traceback is not defined
+
 def _log_exception(exc):
     log.error('Exception in the IETF archiver: %s', exc)
     s = StringIO()
@@ -58,58 +55,26 @@ def _log_exception(exc):
 
 
 class _MockRunStatus:
-    """
-    Emulate (up to duck type) subprocess.CompletedProcess.
-    """
+    """Emulate subprocess.CompletedProcess for HTTP responses."""
 
     def __init__(self, HTTP_status, stdout, stderr):
         self.returncode = 0 if HTTP_status == 201 else HTTP_status
         self.stdout = stdout
         self.stderr = stderr
-        self.args = ["HTTP", "POST"]    # dummy for error reporting
+        self.args = ["HTTP", "POST"]
 
 
 @public
 @implementer(IArchiver)
 class IETFMailarchive:
     """
-    Mailman 3 IArchiver for IETF Mailarchive.
-
-    Configure in mailman.cfg something like
-    [archiver.ietf_mailarchive]
-    # This is IETF's bespoke Mailarchive archiver.
-    class: mailman_mailarchive.IETFMailarchive
-    configuration: /etc/mailman3/ietf_mailarchive.cfg
-
-    In ietf_mailarchive.cfg something like
-    [general]
-    # The base url for the archiver.  This is used to to calculate links to
-    # individual messages in the archive for use in Archived-At field.
-    # Must be synchronized with archive_url_pattern in postconfirm.conf.  (In
-    # fact there is a corresponding "ground truth" in Mailarchive somewhere).
-    base_url: https://mailarchive.ietf.org/arch/
-    # "Password" for HTTP API.  Ignored by PIPE and FILE.
-    api_key: replace_with_a_secret_key_from_vault
-    # api may be HTTP, PIPE, or FILE.
-    api: PIPE
-    # If api is PIPE or FILE, command must be the absolute path to one of
-    # 'call-archives.sh', 'call-archives-pipe.sh', or 'call-archives.py'.
-    # Ignored by HTTP.
-    command: /a/mailarch/current/backend/mlarchive/bin/call-archives.sh
-    # If api is FILE, destination must be a queue directory where Mailarchive
-    # expects to pick up files from call-archive.py.  If api is HTTP, it must
-    # be the URL schema to POST to.  It should provide slots for 'listName'
-    # and 'policy' in braces for interpolation by str.format.  Ignored by PIPE.
-    destination: https://mailarchive.ietf.org/api/v1/message/{policy}/{listName}/
+    Mailman 3 IArchiver for IETF Mail Archive.
     """
-
-    ## public API
 
     name = 'ietf_mailarchive'
     is_enabled = False
 
     def __init__(self):
-        # Read our specific configuration file
         archiver_config = external_configuration(
             config.archiver.ietf_mailarchive.configuration)
         # In theory configuration could change on the fly, but there's no API
@@ -121,7 +86,6 @@ class IETFMailarchive:
             self.base_url += '/'
         self.command = archiver_config.get('general', 'command')
         self.destination = archiver_config.get('general', 'destination')
-        # Get our switchboard
         queue_dir = pathjoin(config.ARCHIVE_DIR, self.name, 'spool')
         self._switchboard = Switchboard(self.name, queue_dir, recover=False)
 
@@ -151,7 +115,6 @@ class IETFMailarchive:
                       pathjoin("msg", mlist.list_name, message_id_hash))
         return url
 
-    # Based on mailman_hyperkitty:archive_message()
     def archive_message(self, mlist, msg):
         """
         Send the message to the archiver, but process the queue first if it
@@ -207,12 +170,9 @@ class IETFMailarchive:
                 # have to drop it on the floor.
                 log.exception(
                     'Failed to preserve the message with id %s: %s',
-                    message_id, exc_info=error)
-                # last-ditch attempt
+                    message_id or 'unknown', exc_info=error)
                 if stem is not None:
                     self._switchboard.finish(stem)
-                # #### This can't be right!
-                #raise
             return None
 
         list_name = mlist.list_name
@@ -233,17 +193,13 @@ class IETFMailarchive:
             try:
                 self._switchboard.enqueue(msg, mlist=mlist)
             except Exception as error:
-                # The message wasn't successfully enqueued.
                 log.error(
-                    'queuing failed on mailing-list %s for message %s',
-                    mlist.list_id, message_id)
-                #_log_exception(error)
+                    'queuing failed on mailing-list %s for message %s with exception %s',
+                    mlist.list_id, message_id, error)
                 if stem is not None:
                     # Try to preserve the original queue entry for possible
                     # analysis.
                     self._switchboard.finish(stem, preserve=True)
-                # #### This can't be right!
-                #raise
             if stem is not None:
                 self._switchboard.finish(stem)
 
@@ -281,7 +237,6 @@ class IETFMailarchive:
             # archive_message handle it.
             raise RuntimeError(proc)
 
-    # Based in part on mailman_hyperkitty:_send_message()
     def _post_to_mailarchive(self, list_name, policy, message):
         """
         Use the HTTP API v1 to POST the message (a bytes) to Mailarchive.
@@ -312,7 +267,7 @@ class IETFMailarchive:
             raise
         status = response.status_code
         if status == 201:
-            pass                        # we be jammin'!
+            pass
         elif status == 400:
             log.error('Bad Request: most likely non-conforming email')
         elif status == 403:
@@ -399,7 +354,6 @@ class IETFMailarchive:
         re-enqueue them.
         """
         self._switchboard.recover_backup_files()
-        # removes files' extensions
         files = self._switchboard.files
         for stem in files:
             log.debug('%s archiver processing queued : %s', self.name, stem)
@@ -418,9 +372,6 @@ class IETFMailarchive:
             mlist = msgdata["mlist"]
             self._archive_message(mlist, msg, stem=stem)
 
-    ## Private methods: implementation of permalink
-
-    # Extracted from postconfirm/postconfirm/service.py:cache_mail()
     def _make_hash(self, mlist, msg):
         if not self.base_url:
             return None
@@ -428,11 +379,9 @@ class IETFMailarchive:
         sha.update(mlist.list_name.encode('utf-8'))
         return urlsafe_b64encode(sha.digest()).strip(b"=").decode('us-ascii')
 
-    # Copied verbatim from postconfirm/postconfirm/service.py:cache_mail()
-    # with substitution: 'msgid' -> 'message_id'
     @staticmethod
     def _get_message_id(msg):
-        # #### check semantics of EmailMessage.__getattribute__
+        """Extract or generate a message ID."""
         message_id = msg['Message-Id']
         if not message_id:
             message_id = msg['Resent-Message-Id']
@@ -441,4 +390,3 @@ class IETFMailarchive:
         else:
             message_id = make_msgid('ARCHIVE')
         return message_id
-
