@@ -1,0 +1,30 @@
+[project]
+name = "mailman-mailarchive"
+version = "1.0.0"
+description = "Mailman 3 archiver plugin for IETF Mail Archive"
+readme = "README.md"
+license = { text = "GPLv3+" }
+requires-python = ">=3.9"
+authors = [
+    { name = "Stephen J. Turnbull" },
+    { name = "Henrik Levkowetz" },
+    { name = "Sam Sargeant" },
+]
+classifiers = [
+    "Intended Audience :: System Administrators",
+]
+dependencies = [
+    "mailman>=3.3.0",
+    "requests",
+    "zope.interface>=5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/ietf-tools/mailman-mailarchive"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
