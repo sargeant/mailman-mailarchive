@@ -14,27 +14,17 @@ Add to `mailman.cfg`:
 
 ```ini
 [archiver.ietf_mailarchive]
-class: mailman_mailarchive.IETFMailarchive
+class: mailman_mailarchive.archiver.IETFMailarchive
 enable: yes
-configuration: /etc/mailman3/ietf_mailarchive.cfg
 ```
 
-Create the configuration file (e.g., `/etc/mailman3/ietf_mailarchive.cfg`):
+Set environment variables:
 
-```ini
-[general]
-base_url: https://mailarchive.ietf.org/arch/
-api_key: your_api_key_here
-destination: https://mailarchive.ietf.org/api/v1/message/import/
+```bash
+export MAILARCHIVE_API_KEY=__api_key__
+export MAILARCHIVE_BASE_URL=https://mailarchive.ietf.org/arch/
+export MAILARCHIVE_DESTINATION=https://mailarchive.ietf.org/api/v1/message/import/
 ```
-
-## Configuration Options
-
-| Option | Description |
-|--------|-------------|
-| `base_url` | Base URL for archive links (used in `Archived-At` header) |
-| `api_key` | Authentication key for Mail Archive API |
-| `destination` | API endpoint URL |
 
 ## License
 
