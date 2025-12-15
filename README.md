@@ -14,7 +14,7 @@ Add to `mailman.cfg`:
 
 ```ini
 [archiver.ietf_mailarchive]
-class: mailman_mailarchive.archiver.IETFMailarchive
+class: mailman_mailarchive.IETFMailarchive
 enable: yes
 ```
 
