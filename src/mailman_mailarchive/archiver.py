@@ -75,14 +75,12 @@ class IETFMailarchive:
     is_enabled = False
 
     def __init__(self):
-        self.api_key = os.environ.get('MAILARCHIVE_API_KEY', '')
-        self.base_url = os.environ.get(
-            'MAILARCHIVE_BASE_URL', 'https://mailarchive.ietf.org/arch/')
+        # Will fail to init if these variables are not set
+        self.api_key = os.environ['MAILARCHIVE_API_KEY']
+        self.base_url = os.environ['MAILARCHIVE_BASE_URL']
         if not self.base_url.endswith('/'):
             self.base_url += '/'
-        self.destination = os.environ.get(
-            'MAILARCHIVE_DESTINATION',
-            'https://mailarchive.ietf.org/api/v1/message/import/')
+        self.destination = os.environ['MAILARCHIVE_DESTINATION']
         queue_dir = pathjoin(config.ARCHIVE_DIR, self.name, 'spool')
         self._switchboard = Switchboard(self.name, queue_dir, recover=False)
 
