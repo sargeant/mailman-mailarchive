@@ -77,14 +77,10 @@ class IETFMailarchive:
     def __init__(self):
         archiver_config = external_configuration(
             config.archiver.ietf_mailarchive.configuration)
-        # In theory configuration could change on the fly, but there's no API
-        # to notify us.  So we don't bother with a _load_configuration method.
-        self.api = archiver_config.get('general', 'api')
         self.api_key = archiver_config.get('general', 'api_key')
         self.base_url = archiver_config.get('general', 'base_url')
         if not self.base_url.endswith('/'):
             self.base_url += '/'
-        self.command = archiver_config.get('general', 'command')
         self.destination = archiver_config.get('general', 'destination')
         queue_dir = pathjoin(config.ARCHIVE_DIR, self.name, 'spool')
         self._switchboard = Switchboard(self.name, queue_dir, recover=False)
@@ -111,9 +107,8 @@ class IETFMailarchive:
         message_id_hash = self._make_hash(mlist, msg)
         if message_id_hash is None:
             return None
-        url = urljoin(self.base_url,
-                      pathjoin("msg", mlist.list_name, message_id_hash))
-        return url
+        return urljoin(self.base_url,
+                       pathjoin("msg", mlist.list_name, message_id_hash))
 
     def archive_message(self, mlist, msg):
         """
@@ -150,6 +145,7 @@ class IETFMailarchive:
         :returns: The url string.
         """
 
+        message_id = None
         try:
             message_id = self._get_message_id(msg)
             message_text = msg.as_bytes()
@@ -215,26 +211,14 @@ class IETFMailarchive:
         """
 
         log.debug('%s archiver: sending message %s', self.name, message_id)
-        if self.api == 'HTTP':
-            proc = self._post_to_mailarchive(list_name, policy, message)
-        elif self.api == 'FILE':
-            proc = self._queue_file_for_mailarchive(list_name, policy, message)
-        elif self.api == 'PIPE':
-            proc = self._pipe_to_mailarchive(list_name, policy, message)
-        else:
-            # can't get here
-            proc = _MockRunStatus(500, None, None)
+        proc = self._post_to_mailarchive(list_name, policy, message)
+
         if proc.returncode != 0:
-            log.error(self.process_errfmt.format(cmd=' '.join(' '.join(proc.args)),
-                                                 code=proc.returncode,
-                                                 msg_id=message_id))
-        if proc.stdout:
-            log.info(proc.stdout)
-        if proc.stderr:
-            log.error(proc.stderr)
-        if proc.returncode != 0:
-            # #### bad design?!  Just return proc and let _archive_message or
-            # archive_message handle it.
+            log.error('HTTP POST returned %d for %s', proc.returncode, message_id)
+            if proc.stdout:
+                log.info(proc.stdout)
+            if proc.stderr:
+                log.error(proc.stderr)
             raise RuntimeError(proc)
 
     def _post_to_mailarchive(self, list_name, policy, message):
@@ -257,96 +241,27 @@ class IETFMailarchive:
             'message' : b64encode(message).decode()
             }
         try:
-            response = post(url,
-                            json=api_v1_data,
-                            headers={'X-API-Key' : self.api_key})
+            response = post(url, json=api_v1_data,
+                            headers={'X-API-Key': self.api_key})
         except RequestException as error:
-            log.error(
-                'Connection to Mailarchive failed: %s',
-                error)
+            log.error('Connection to Mail Archive failed: %s', error)
             raise
+
         status = response.status_code
         if status == 201:
             pass
         elif status == 400:
             log.error('Bad Request: most likely non-conforming email')
         elif status == 403:
-            log.error('Forbidden; not allowed to archive message')
+            log.error('Forbidden: not allowed to archive message')
         elif status == 404:
-            log.error(f"Not found; {self.destination} doesn't implement the API")
+            log.error('Not found: %s does not implement the API', self.destination)
         elif status == 502:
-            log.error('Bad Gateway: most likely Mailarchive is down')
+            log.error('Bad Gateway: Mail Archive may be down')
         else:
-            log.error(f'Unexpected status {status}')
+            log.error('Unexpected status %d', status)
         return _MockRunStatus(status, response.content, None)
 
-    # Based in part on mailman_hyperkitty:_send_message()
-    def _old_post_to_mailarchive(self, list_name, policy, message):
-        """
-        Use the new HTTP API to POST the message (a bytes) to Mailarchive.
-        Expect Status Codes 201 (Created) Or 400 (Bad Request).
-
-        :param list_name: The localpart of the List-Post address.
-        :param policy: The name of the list's archive_policy.
-        :param message: The message as a bytes.
-        :returns: The subprocess's status.
-        :rtype: _MockRunStatus.
-        """
-
-        url = self.destination.format(policy=policy, listName=list_name)
-        try:
-            response = post(url, data=message,
-                            headers={'X-API-Key' : self.api_key})
-        except RequestException as error:
-            log.error(
-                'Connection to Mailarchive failed: %s',
-                error)
-            raise
-        status = response.status_code
-        if status == 201:
-            pass                        # we be jammin'!
-        elif status == 400:
-            log.error('Bad Request: most likely non-conforming email')
-        else:
-            log.error(f'Unexpected status {status}')
-        return _MockRunStatus(status, response.content, None)
-
-    def _pipe_to_mailarchive(self, list_name, policy, message):
-        """
-        Archive a message using the old piping API.
-
-        :param list_name: The localpart of the List-Post address.
-        :param policy: The name of the list's archive_policy.
-        :param message: The message as a bytes.
-        :returns: The subprocess's status.
-        :rtype: subprocess.CompletedProcess.
-        """
-
-        # convert policy to long option form
-        # self.command must be absolute path
-        command = [self.command, list_name, '--' + policy]
-        return run(command, capture_output=True, input=message)
-
-    def _queue_file_for_mailarchive(self, list_name, policy, message):
-        """
-        Archive a message using the old temporary file API.
-
-        :param list_name: The localpart of the List-Post address.
-        :param policy: The name of the list's archive_policy.
-        :param message: The message as a bytes.
-        :returns: The subprocess's status.
-        :rtype: subprocess.CompletedProcess.
-        """
-
-        with NamedTemporaryFile(delete=False,
-                                dir=self.destination,
-                                prefix=f'{list_name}.{policy}.') as tempfile:
-            tempfile.write(message)
-            # self.command must be absolute path
-            command = [self.command, tempfile.name]
-            return run(command, capture_output=True)
-
-    # Slightly modified mailman_hyperkitty:process_queue()
     def _process_queue(self):
         """Go through the queue of held messages to archive and send them to
         the archive.
@@ -356,7 +271,7 @@ class IETFMailarchive:
         self._switchboard.recover_backup_files()
         files = self._switchboard.files
         for stem in files:
-            log.debug('%s archiver processing queued : %s', self.name, stem)
+            log.debug('%s archiver processing queued: %s', self.name, stem)
             try:
                 # Ask the switchboard for the message and metadata objects
                 # associated with this queue file.
@@ -373,6 +288,7 @@ class IETFMailarchive:
             self._archive_message(mlist, msg, stem=stem)
 
     def _make_hash(self, mlist, msg):
+        """Generate permalink hash matching Mail Archive's algorithm."""
         if not self.base_url:
             return None
         sha = sha1(self._get_message_id(msg).encode('us-ascii'))
