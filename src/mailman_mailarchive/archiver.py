@@ -27,7 +27,6 @@
 """Mailman 3 IArchiver for IETF Mail Archive."""
 
 import logging
-import os
 import traceback
 from base64 import b64encode, urlsafe_b64encode
 from email.utils import make_msgid
@@ -37,6 +36,7 @@ from os.path import join as pathjoin
 from urllib.parse import urljoin
 
 from mailman.config import config
+from mailman.config.config import external_configuration
 from mailman.core.switchboard import Switchboard
 from mailman.interfaces.archiver import IArchiver
 from public import public
@@ -75,12 +75,13 @@ class IETFMailarchive:
     is_enabled = False
 
     def __init__(self):
-        # Will fail to init if these variables are not set
-        self.api_key = os.environ['MAILARCHIVE_API_KEY']
-        self.base_url = os.environ['MAILARCHIVE_BASE_URL']
+        archiver_config = external_configuration(
+            config.archiver.ietf_mailarchive.configuration)
+        self.api_key = archiver_config.get('general', 'api_key')
+        self.base_url = archiver_config.get('general', 'base_url')
         if not self.base_url.endswith('/'):
             self.base_url += '/'
-        self.destination = os.environ['MAILARCHIVE_DESTINATION']
+        self.destination = archiver_config.get('general', 'destination')
         queue_dir = pathjoin(config.ARCHIVE_DIR, self.name, 'spool')
         self._switchboard = Switchboard(self.name, queue_dir, recover=False)
 
